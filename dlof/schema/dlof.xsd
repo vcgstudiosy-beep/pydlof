@@ -1,0 +1,768 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ══════════════════════════════════════════════════════════════
+  DLoF — Document Loop Format  |  Schema v1.0 + remoteSync + webPublish
+  https://dlof.org/schema/1.0
+  ══════════════════════════════════════════════════════════════
+
+  إضافتان على v1.0 الأصلي:
+  ★ RemoteSyncType    — ربط المحتوى بمصدر حي على الإنترنت
+  ★ WebPublishType    — نشر ملف dlof كصفحة ويب حقيقية
+
+  الفكرة:
+    كل عنصر محتوى (qaItem, bookChapter, termDefinition,
+    infoExplain, genericItem) يستطيع الآن أن يُعلن عن مصدره
+    الحي على الإنترنت ويحمل بداخله آخر بصمة معروفة للمحتوى.
+    التطبيق يقارن البصمة المخزّنة مع ما يجلبه من الشبكة —
+    إن اختلفتا يعرض تنبيه "تحديث متاح" دون أي منطق خارجي.
+
+    البروتوكولات المدعومة:
+      • https   — JSON/XML/HTML endpoint عام
+      • rss     — خلاصة RSS/Atom (يُستخرج المحتوى منها)
+      • sparql  — استعلام على Wikidata أو أي triple-store
+      • git     — ملف خام في مستودع عام (raw URL)
+      • webhook — التطبيق يُرسل إلى URL عند كل تغيير محلي
+
+    حقل field:
+      مسار JSONPath أو XPath داخل الاستجابة لاستخراج الحقل
+      المحدد فقط (مثلاً "$.definitions[0].definition" من
+      نتيجة Dictionary API لتحديث تعريف مصطلح تلقائياً).
+
+    policy:
+      manual   — لا تحديث تلقائي، فقط إشعار
+      notify   — إشعار فقط عند اكتشاف تغيير
+      auto     — تحديث المحتوى تلقائياً إن اختلفت البصمة
+      readonly — المصدر للقراءة فقط، لا كتابة إليه أبداً
+  ══════════════════════════════════════════════════════════════
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:dlof="https://dlof.org/schema/1.0"
+           targetNamespace="https://dlof.org/schema/1.0"
+           elementFormDefault="qualified">
+
+  <!-- ══════════════════════════════════════════════════════
+       العنصر الجذر — بدون تغيير عن v1.0
+  ══════════════════════════════════════════════════════ -->
+  <xs:element name="documentLoop">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="metadata"    type="dlof:MetadataType"/>
+        <xs:element name="loopLinks"   type="dlof:LoopLinksType"/>
+        <xs:element name="content"     type="dlof:ContentType"/>
+        <xs:element name="attachments"  type="dlof:AttachmentsType"  minOccurs="0"/>
+        <xs:element name="template"     type="dlof:TemplateType"     minOccurs="0"/>
+        <!--
+          ★ ميزة جديدة: mediaFolder — فهرس مجلد الوسائط
+          يُعلن عن الملفات الموجودة في مجلد media/ بجانب الملف
+          انظر MediaFolderType أدناه للتفاصيل الكاملة
+        -->
+        <xs:element name="mediaFolder"  type="dlof:MediaFolderType"  minOccurs="0"/>
+        <!--
+          ★ ميزة جديدة: webPublish — نشر الملف كصفحة ويب حقيقية
+          انظر WebPublishType أدناه للتفاصيل الكاملة
+        -->
+        <xs:element name="webPublish"   type="dlof:WebPublishType"   minOccurs="0"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="xs:string" use="required" fixed="1.0"/>
+      <xs:attribute name="id"      type="xs:ID"     use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ══════════════════════════════════════════════════════
+       ★ RemoteSyncType — الميزة الجديدة
+       يُستخدم كعنصر اختياري أخير داخل كل نوع محتوى
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="RemoteSyncType">
+    <xs:sequence>
+
+      <!--
+        url: العنوان الكامل للمصدر الحي.
+        أمثلة:
+          https://en.wiktionary.org/api/rest_v1/page/definition/photosynthesis
+          https://api.openverse.org/v1/images/?q=photosynthesis
+          https://query.wikidata.org/sparql?query=...
+          https://raw.githubusercontent.com/user/repo/main/ch02.dlof
+      -->
+      <xs:element name="url" type="xs:anyURI"/>
+
+      <!--
+        البروتوكول / طريقة الجلب.
+        https   : GET عادي، الاستجابة JSON أو XML
+        rss     : خلاصة RSS أو Atom
+        sparql  : استعلام SPARQL (url يحتوي ?query=...)
+        git     : raw file URL من مستودع عام
+        webhook : POST إلى هذا الـ URL عند كل تغيير محلي
+      -->
+      <xs:element name="protocol" type="dlof:SyncProtocolType"/>
+
+      <!--
+        field: مسار JSONPath أو XPath لاستخراج قيمة محددة
+        من الاستجابة وتعيينها للحقل المطلوب.
+        مثال لـ qaItem/answer من Dictionary API:
+          $.meanings[0].definitions[0].definition
+        مثال لـ bookChapter/text من RSS:
+          /rss/channel/item[1]/description
+        إن غاب: يُعامَل جسم الاستجابة كاملاً كمحتوى نصي.
+      -->
+      <xs:element name="field"    type="xs:string"   minOccurs="0"/>
+
+      <!--
+        etag: آخر ETag أو Last-Modified أعادها الخادم.
+        يُخزَّن بعد كل مزامنة ناجحة ويُرسَل في الطلب
+        التالي (If-None-Match / If-Modified-Since) لتوفير
+        البيانات — إن أعاد الخادم 304 فالمحتوى لم يتغير.
+      -->
+      <xs:element name="etag"     type="xs:string"   minOccurs="0"/>
+
+      <!--
+        contentHash: بصمة SHA-256 لآخر محتوى تمت مزامنته.
+        التطبيق يحسب بصمة الاستجابة الجديدة ويقارنها هنا —
+        إن اختلفتا يعلم أن المصدر تغيّر حتى لو غاب ETag.
+      -->
+      <xs:element name="contentHash" minOccurs="0">
+        <xs:complexType>
+          <xs:attribute name="algorithm" type="xs:string" use="required" fixed="sha256"/>
+          <xs:attribute name="value"     type="xs:string" use="required"/>
+        </xs:complexType>
+      </xs:element>
+
+      <!--
+        syncedAt: تاريخ ووقت آخر مزامنة ناجحة فعلية.
+      -->
+      <xs:element name="syncedAt"   type="xs:dateTime" minOccurs="0"/>
+
+      <!--
+        headers: ترويسات HTTP اختيارية للطلب
+        (مثل Authorization, Accept, X-API-Key).
+        القيمة مشفّرة كـ JSON object مضغوط.
+        مثال: {"Accept":"application/json","X-Source":"dlof"}
+        تحذير: لا تضع مفاتيح سرية بنص صريح في الملف —
+        استخدم متغيرات بيئة والتطبيق يحلّها.
+      -->
+      <xs:element name="headers"    type="xs:string"   minOccurs="0"/>
+
+      <!--
+        transform: تعبير JSONata أو XSLT مصغّر لتحويل
+        الاستجابة الخام إلى نص نظيف قبل المقارنة والتحديث.
+        مثال (JSONata):
+          $join(meanings[0].definitions[0].definition, " ")
+      -->
+      <xs:element name="transform"  type="xs:string"   minOccurs="0"/>
+
+    </xs:sequence>
+
+    <!--
+      policy: سياسة التحديث
+        manual   — لا شيء تلقائي، المستخدم يحدّث يدوياً
+        notify   — إشعار فقط عند اكتشاف تغيير (افتراضي)
+        auto     — تحديث المحتوى المحلي تلقائياً
+        readonly — اقرأ فقط من المصدر، لا ترسل إليه أبداً
+    -->
+    <xs:attribute name="policy"        type="dlof:SyncPolicyType" use="optional" default="notify"/>
+
+    <!--
+      intervalMinutes: كم دقيقة بين كل مزامنة تلقائية.
+      0 = عند كل فتح للملف، مهما كان الوقت.
+      غائب = لا جدول تلقائي (يعتمد على policy).
+    -->
+    <xs:attribute name="intervalMinutes" type="xs:nonNegativeInteger" use="optional"/>
+
+    <!--
+      targetField: اسم الحقل داخل نوع المحتوى الذي سيُكتب
+      فيه الناتج بعد التحويل.
+      مثال: "answer" لـ qaItem أو "definition" لـ termDefinition.
+      إن غاب: يكتب في الحقل الرئيسي لكل نوع (answer, text, definition…)
+    -->
+    <xs:attribute name="targetField"    type="xs:string"           use="optional"/>
+
+  </xs:complexType>
+
+  <!-- ══════════════════════════════════════════════════════
+       أنواع مساعدة لـ remoteSync
+  ══════════════════════════════════════════════════════ -->
+  <xs:simpleType name="SyncProtocolType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="https"/>
+      <xs:enumeration value="rss"/>
+      <xs:enumeration value="sparql"/>
+      <xs:enumeration value="git"/>
+      <xs:enumeration value="webhook"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="SyncPolicyType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="manual"/>
+      <xs:enumeration value="notify"/>
+      <xs:enumeration value="auto"/>
+      <xs:enumeration value="readonly"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ══════════════════════════════════════════════════════
+       البيانات الوصفية — بدون تغيير
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="MetadataType">
+    <xs:sequence>
+      <xs:element name="title"     type="xs:string"/>
+      <xs:element name="domain"    type="dlof:DomainType"/>
+      <xs:element name="author"    type="xs:string"   minOccurs="0"/>
+      <xs:element name="createdAt" type="xs:dateTime" minOccurs="0"/>
+      <xs:element name="updatedAt" type="xs:dateTime" minOccurs="0"/>
+      <xs:element name="language"  type="xs:string"   minOccurs="0" default="ar"/>
+      <xs:element name="tags" minOccurs="0">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="tag" type="xs:string" maxOccurs="unbounded"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="signature" type="dlof:SignatureType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:simpleType name="DomainType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="education"/>
+      <xs:enumeration value="book"/>
+      <xs:enumeration value="infoApp"/>
+      <xs:enumeration value="infoLoop"/>
+      <xs:enumeration value="series"/>   <!-- ★ حلقات مسلسل / سلسلة فيديو / بودكاست -->
+      <xs:enumeration value="custom"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ══════════════════════════════════════════════════════
+       روابط الحلقة — بدون تغيير
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="LoopLinksType">
+    <xs:sequence>
+      <xs:element name="previous" type="dlof:LinkRefType" minOccurs="0"/>
+      <xs:element name="next"     type="dlof:LinkRefType" minOccurs="0"/>
+      <xs:element name="loopRoot" type="xs:boolean"       minOccurs="0" default="false"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="LinkRefType">
+    <xs:attribute name="ref"   type="xs:string" use="required"/>
+    <xs:attribute name="title" type="xs:string" use="optional"/>
+  </xs:complexType>
+
+  <!-- ══════════════════════════════════════════════════════
+       المحتوى — كل نوع يقبل <remoteSync> اختياري في نهايته
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="ContentType">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="genericItem"    type="dlof:GenericItemType"/>
+      <xs:element name="qaItem"         type="dlof:QAItemType"/>
+      <xs:element name="bookChapter"    type="dlof:BookChapterType"/>
+      <xs:element name="termDefinition" type="dlof:TermDefinitionType"/>
+      <xs:element name="infoExplain"    type="dlof:InfoExplainType"/>
+      <!-- ★ نوع جديد: episodeItem — حلقة واحدة من سلسلة (مسلسل/بودكاست/فيديو) -->
+      <xs:element name="episodeItem"    type="dlof:EpisodeItemType"/>
+    </xs:choice>
+  </xs:complexType>
+
+  <!--
+  ══════════════════════════════════════════════════════════════
+  ★ EpisodeItemType — حلقة واحدة من سلسلة
+
+  الفكرة:
+    بديل احترافي لامتدادات .ep / .episode غير القياسية.
+    كل حلقة هي ملف .dlof عادي يحمل هذا النوع من المحتوى.
+    الحلقات مترابطة عبر <loopLinks> بنفس آلية الفصول.
+
+  الامتدادات المقبولة للملفات في LoopLinks:
+    .dlof       — الامتداد الرسمي الموصى به
+    .ep         — مقبول كمرادف (يُحوَّل داخلياً لـ .dlof)
+    .episode    — مقبول كمرادف (يُحوَّل داخلياً لـ .dlof)
+
+  حقول الحلقة:
+    episodeNumber  — رقم الحلقة (1، 2، 3...)
+    seasonNumber   — رقم الموسم (اختياري)
+    episodeTitle   — عنوان الحلقة
+    synopsis       — ملخص قصير للحلقة
+    duration       — المدة بالثواني (مفيد لبودكاست/فيديو)
+    seriesTitle    — عنوان السلسلة كلها (اختياري، للإشارة)
+    mediaRef       — مرجع لمرفق الوسائط الرئيسي (id من <attachments>)
+                     أو مسار ملف داخل مجلد media/
+    releaseDate    — تاريخ النشر
+    body           — نص/وصف/نسخة نصية للحلقة
+    thumbnailBase64 — صورة مصغرة للحلقة (base64)، مختارة يدوياً أو مستخرجة تلقائياً من الفيديو
+  ══════════════════════════════════════════════════════════════
+  -->
+  <xs:complexType name="EpisodeItemType">
+    <xs:sequence>
+      <xs:element name="episodeNumber" type="xs:integer"  minOccurs="0"/>
+      <xs:element name="seasonNumber"  type="xs:integer"  minOccurs="0"/>
+      <xs:element name="episodeTitle"  type="xs:string"/>
+      <xs:element name="synopsis"      type="xs:string"   minOccurs="0"/>
+      <xs:element name="duration"      type="xs:integer"  minOccurs="0"/>
+      <xs:element name="seriesTitle"   type="xs:string"   minOccurs="0"/>
+      <xs:element name="mediaRef"      type="xs:string"   minOccurs="0"/>
+      <xs:element name="releaseDate"   type="xs:date"     minOccurs="0"/>
+      <xs:element name="body"          type="xs:string"   minOccurs="0"/>
+      <!-- صورة مصغرة للحلقة (base64)، مختارة يدوياً أو مستخرجة تلقائياً من الفيديو -->
+      <xs:element name="thumbnailBase64" type="xs:string" minOccurs="0"/>
+      <!-- ★ -->
+      <xs:element name="remoteSync"    type="dlof:RemoteSyncType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── genericItem ── -->
+  <xs:complexType name="GenericItemType">
+    <xs:sequence>
+      <xs:element name="type"       type="xs:string"/>
+      <xs:element name="element"    type="xs:string"/>
+      <xs:element name="body"       type="xs:string"/>
+      <xs:any namespace="##other" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+      <!-- ★ -->
+      <xs:element name="remoteSync" type="dlof:RemoteSyncType" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="customType" type="xs:string" use="optional"/>
+  </xs:complexType>
+
+  <!-- ── qaItem ── -->
+  <xs:complexType name="QAItemType">
+    <xs:sequence>
+      <xs:element name="question"    type="xs:string"/>
+      <xs:element name="answer"      type="xs:string"/>
+      <xs:element name="explanation" type="xs:string" minOccurs="0"/>
+      <xs:element name="difficulty"  type="xs:string" minOccurs="0"/>
+      <!-- ★ -->
+      <xs:element name="remoteSync"  type="dlof:RemoteSyncType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── bookChapter ── -->
+  <xs:complexType name="BookChapterType">
+    <xs:sequence>
+      <xs:element name="chapterNumber" type="xs:integer" minOccurs="0"/>
+      <xs:element name="chapterTitle"  type="xs:string"/>
+      <xs:element name="text"          type="xs:string"/>
+      <xs:element name="summary"       type="xs:string" minOccurs="0"/>
+      <!-- ★ -->
+      <xs:element name="remoteSync"    type="dlof:RemoteSyncType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── termDefinition ── -->
+  <xs:complexType name="TermDefinitionType">
+    <xs:sequence>
+      <xs:element name="term"        type="xs:string"/>
+      <xs:element name="definition"  type="xs:string"/>
+      <xs:element name="example"     type="xs:string" minOccurs="0"/>
+      <!-- ★ -->
+      <xs:element name="remoteSync"  type="dlof:RemoteSyncType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── infoExplain ── -->
+  <xs:complexType name="InfoExplainType">
+    <xs:sequence>
+      <xs:element name="topic"       type="xs:string"/>
+      <xs:element name="explanation" type="xs:string"/>
+      <xs:element name="source"      type="xs:string" minOccurs="0"/>
+      <!-- ★ -->
+      <xs:element name="remoteSync"  type="dlof:RemoteSyncType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ══════════════════════════════════════════════════════
+       المرفقات — بدون تغيير
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="AttachmentsType">
+    <xs:sequence>
+      <xs:element name="attachment" type="dlof:AttachmentType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="AttachmentType">
+    <xs:sequence>
+      <xs:element name="data"    type="xs:base64Binary" minOccurs="0"/>
+      <xs:element name="uri"     type="xs:string"       minOccurs="0"/>
+      <xs:element name="caption" type="xs:string"       minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="id"        type="xs:string"           use="required"/>
+    <xs:attribute name="fileName"  type="xs:string"           use="required"/>
+    <xs:attribute name="mimeType"  type="xs:string"           use="required"/>
+    <xs:attribute name="kind"      type="dlof:AttachmentKindType" use="required"/>
+    <xs:attribute name="sizeBytes" type="xs:long"             use="optional"/>
+  </xs:complexType>
+
+  <xs:simpleType name="AttachmentKindType">
+    <xs:restriction base="xs:string">
+      <!-- صور: png, jpg, jpeg, gif, webp, svg, bmp, tiff, ico, heic -->
+      <xs:enumeration value="image"/>
+      <!-- فيديو: mp4, mkv, avi, mov, webm, flv, wmv, m4v, 3gp -->
+      <xs:enumeration value="video"/>
+      <!-- صوت: mp3, wav, ogg, aac, flac, m4a, wma, opus -->
+      <xs:enumeration value="audio"/>
+      <!-- ترجمة: srt, vtt, ass, ssa -->
+      <xs:enumeration value="subtitle"/>
+      <!-- ملف عام: pdf, docx, xlsx, pptx, zip, txt, وغيرها -->
+      <xs:enumeration value="file"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!--
+  ══════════════════════════════════════════════════════════════
+  ★ MediaFolderType — مجلد الوسائط (media/)
+
+  الفكرة:
+    كل مجلد dlof يمكن أن يحتوي مجلداً فرعياً اسمه media/
+    يجمع ملفات الوسائط المرتبطة بالحلقات دون تضمينها base64
+    داخل ملفات .dlof (مفيد للملفات الكبيرة كالفيديو والصوت).
+
+  هيكل المجلد المتوقع:
+    MySeries/
+    ├── ep01.dlof              ← حلقة 1 (أو ep01.ep / ep01.episode)
+    ├── ep02.dlof              ← حلقة 2
+    ├── ep03.dlof              ← حلقة 3
+    └── media/                 ← مجلد الوسائط
+        ├── images/            ← صور (png, jpg, jpeg, gif, webp, svg, bmp, tiff, heic)
+        │   ├── cover.jpg
+        │   └── thumbnail-ep01.png
+        ├── videos/            ← فيديو (mp4, mkv, avi, mov, webm, flv, wmv, m4v)
+        │   ├── ep01.mp4
+        │   └── ep02.mkv
+        ├── audio/             ← صوت (mp3, wav, ogg, aac, flac, m4a, opus)
+        │   ├── ep01.mp3
+        │   └── ep02.aac
+        └── subtitles/         ← ترجمة (srt, vtt, ass, ssa)
+            ├── ep01-ar.srt
+            └── ep01-en.vtt
+
+  الإشارة لملفات media/ من داخل .dlof:
+    في <episodeItem>: <mediaRef>media/videos/ep01.mp4</mediaRef>
+    في <attachment>:  <uri>media/images/cover.jpg</uri>
+
+  الامتدادات المدعومة لكل تصنيف:
+    images/    : .png .jpg .jpeg .gif .webp .svg .bmp .tiff .ico .heic
+    videos/    : .mp4 .mkv .avi .mov .webm .flv .wmv .m4v .3gp
+    audio/     : .mp3 .wav .ogg .aac .flac .m4a .wma .opus
+    subtitles/ : .srt .vtt .ass .ssa
+  ══════════════════════════════════════════════════════════════
+  -->
+  <xs:complexType name="MediaFolderType">
+    <xs:sequence>
+      <!--
+        كل عنصر mediaFile يمثّل ملفاً واحداً داخل media/
+        path: المسار النسبي من جذر مجلد dlof (مثل: media/videos/ep01.mp4)
+        kind: نوع الوسيط (image, video, audio, subtitle, file)
+        label: وصف بشري اختياري
+      -->
+      <xs:element name="mediaFile" minOccurs="0" maxOccurs="unbounded">
+        <xs:complexType>
+          <xs:attribute name="path"  type="xs:string"              use="required"/>
+          <xs:attribute name="kind"  type="dlof:AttachmentKindType" use="required"/>
+          <xs:attribute name="label" type="xs:string"              use="optional"/>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ══════════════════════════════════════════════════════
+       القالب — بدون تغيير
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="TemplateType">
+    <xs:attribute name="ref"                 type="xs:string"              use="optional"/>
+    <xs:attribute name="primaryColor"        type="xs:string"              use="optional"/>
+    <xs:attribute name="secondaryColor"      type="xs:string"              use="optional"/>
+    <xs:attribute name="backgroundColor"     type="xs:string"              use="optional"/>
+    <xs:attribute name="textColor"           type="xs:string"              use="optional"/>
+    <xs:attribute name="fontFamily"          type="xs:string"              use="optional"/>
+    <xs:attribute name="layout"              type="dlof:TemplateLayoutType" use="optional" default="standard"/>
+    <xs:attribute name="headerAttachmentRef" type="xs:string"              use="optional"/>
+  </xs:complexType>
+
+  <xs:simpleType name="TemplateLayoutType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="standard"/>
+      <xs:enumeration value="card"/>
+      <xs:enumeration value="magazine"/>
+      <xs:enumeration value="minimal"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ══════════════════════════════════════════════════════
+       التوقيع — بدون تغيير
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="SignatureType">
+    <xs:attribute name="algorithm" type="xs:string"   use="required"/>
+    <xs:attribute name="value"     type="xs:string"   use="required"/>
+    <xs:attribute name="signedBy"  type="xs:string"   use="optional"/>
+    <xs:attribute name="signedAt"  type="xs:dateTime" use="optional"/>
+  </xs:complexType>
+
+  <!-- ══════════════════════════════════════════════════════
+       ★ WebPublishType — نشر ملف dlof كصفحة ويب حقيقية
+       ══════════════════════════════════════════════════════
+
+       الفكرة:
+         ملف .dlof يحمل بداخله تعليمات نشره كصفحة HTML على
+         الإنترنت: إلى أين يُرفع، بأي بروتوكول، وأي بيانات
+         SEO وOpen Graph تُضمَّن في <head> لجعلها صفحة حقيقية
+         تظهر في Google وتُشارَك على وسائل التواصل الاجتماعي.
+
+         البروتوكولات المدعومة:
+           sftp     — رفع ملف HTML إلى خادم عبر SSH/SFTP
+           ftp      — رفع عبر FTP (للخوادم القديمة)
+           github   — GitHub Pages (push إلى branch gh-pages)
+           netlify  — Netlify API (deploy مباشر)
+           custom   — أي endpoint عبر HTTP POST يستقبل الملف
+
+         دورة الحياة:
+           1. التطبيق يولّد HTML من محتوى dlof + template
+           2. يُدمج SEO / OpenGraph / JSON-LD من <seo>
+           3. يرفع الملف حسب <endpoint>
+           4. يُسجَّل الرد في <lastPublish>
+
+         كل هذا يبقى داخل الملف نفسه —
+         لا أداة نشر خارجية ولا لوحة تحكم.
+  ══════════════════════════════════════════════════════ -->
+  <xs:complexType name="WebPublishType">
+    <xs:sequence>
+
+      <!-- ─── وجهة النشر ─── -->
+      <xs:element name="endpoint" type="dlof:PublishEndpointType"/>
+
+      <!-- ─── SEO وبطاقة المشاركة ─── -->
+      <xs:element name="seo" minOccurs="0">
+        <xs:complexType>
+          <xs:sequence>
+            <!--
+              metaDescription: نص الـ <meta name="description">
+              يظهر تحت العنوان في نتائج Google (حتى 160 حرف مثالي)
+            -->
+            <xs:element name="metaDescription" type="xs:string"  minOccurs="0"/>
+
+            <!--
+              canonicalUrl: الرابط الأساسي للصفحة
+              يمنع مشكلة المحتوى المكرر إن نُشر في عدة مواضع
+            -->
+            <xs:element name="canonicalUrl"    type="xs:anyURI"  minOccurs="0"/>
+
+            <!--
+              ogImage: رابط صورة Open Graph
+              تظهر عند مشاركة الصفحة على Twitter/X وواتساب وفيسبوك
+              يمكن أن يكون رابطاً خارجياً أو ref لمرفق attachment
+            -->
+            <xs:element name="ogImage"         type="xs:string"  minOccurs="0"/>
+
+            <!--
+              ogType: نوع المحتوى لـ Open Graph
+              article / book / website / profile
+            -->
+            <xs:element name="ogType"          type="dlof:OgContentType" minOccurs="0"/>
+
+            <!--
+              keywords: كلمات مفتاحية لـ <meta name="keywords">
+            -->
+            <xs:element name="keywords" minOccurs="0">
+              <xs:complexType>
+                <xs:sequence>
+                  <xs:element name="keyword" type="xs:string" maxOccurs="unbounded"/>
+                </xs:sequence>
+              </xs:complexType>
+            </xs:element>
+
+            <!--
+              structuredData: JSON-LD لـ Schema.org
+              يُدمَج كـ <script type="application/ld+json"> في الصفحة
+              يجعل Google تعرض Rich Snippets (تقييمات، مقتطفات...)
+              مثال: {"@type":"Article","headline":"...","author":"..."}
+            -->
+            <xs:element name="structuredData"  type="xs:string"  minOccurs="0"/>
+
+            <!--
+              twitterCard: نوع بطاقة Twitter/X
+              summary | summary_large_image
+            -->
+            <xs:element name="twitterCard"     type="dlof:TwitterCardType" minOccurs="0"/>
+
+            <!--
+              twitterSite: حساب Twitter/X المرتبط مثل "@dlof_app"
+            -->
+            <xs:element name="twitterSite"     type="xs:string"  minOccurs="0"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <!-- ─── خيارات توليد HTML ─── -->
+      <xs:element name="htmlOptions" minOccurs="0">
+        <xs:complexType>
+          <!--
+            includeLoopNav: هل يُضاف شريط تنقل previous/next؟
+          -->
+          <xs:attribute name="includeLoopNav"  type="xs:boolean" use="optional" default="true"/>
+          <!--
+            includeMetaPanel: هل تُعرض البيانات الوصفية (مؤلف، تاريخ…)?
+          -->
+          <xs:attribute name="includeMetaPanel" type="xs:boolean" use="optional" default="true"/>
+          <!--
+            lang: قيمة خاصية lang في <html lang="...">
+            إن غابت يُستخدم metadata/language
+          -->
+          <xs:attribute name="lang"             type="xs:string"  use="optional"/>
+          <!--
+            dir: اتجاه النص rtl | ltr
+          -->
+          <xs:attribute name="dir" use="optional" default="rtl">
+            <xs:simpleType>
+              <xs:restriction base="xs:string">
+                <xs:enumeration value="rtl"/>
+                <xs:enumeration value="ltr"/>
+              </xs:restriction>
+            </xs:simpleType>
+          </xs:attribute>
+          <!--
+            injectCss: CSS إضافي يُحقن في <style> داخل الصفحة
+            مفيد لتخصيص سريع دون ملف خارجي
+          -->
+          <xs:attribute name="injectCss"        type="xs:string"  use="optional"/>
+          <!--
+            analyticsId: معرّف Google Analytics أو Plausible
+            يُضاف كـ <script> تتبع في الصفحة
+          -->
+          <xs:attribute name="analyticsId"      type="xs:string"  use="optional"/>
+        </xs:complexType>
+      </xs:element>
+
+      <!-- ─── سجل آخر نشر ─── -->
+      <xs:element name="lastPublish" minOccurs="0">
+        <xs:complexType>
+          <!--
+            publishedAt: تاريخ ووقت آخر نشر ناجح
+          -->
+          <xs:attribute name="publishedAt"  type="xs:dateTime" use="optional"/>
+          <!--
+            publishedUrl: الرابط الفعلي للصفحة المنشورة
+          -->
+          <xs:attribute name="publishedUrl" type="xs:anyURI"   use="optional"/>
+          <!--
+            status: نتيجة آخر عملية نشر
+            success | failed | pending
+          -->
+          <xs:attribute name="status"       type="dlof:PublishStatusType" use="optional"/>
+          <!--
+            httpStatus: رمز HTTP من الخادم (200, 201, 409...)
+          -->
+          <xs:attribute name="httpStatus"   type="xs:integer"  use="optional"/>
+        </xs:complexType>
+      </xs:element>
+
+    </xs:sequence>
+
+    <!--
+      enabled: هل النشر مفعَّل لهذا الملف؟
+      false = تجاهل هذا العنصر تماماً حتى لو موجود
+    -->
+    <xs:attribute name="enabled"     type="xs:boolean"           use="optional" default="true"/>
+
+    <!--
+      outputFileName: اسم ملف HTML الناتج
+      إن غاب: يستخدم id الوثيقة + ".html"
+    -->
+    <xs:attribute name="outputFileName" type="xs:string"         use="optional"/>
+
+    <!--
+      publishMode:
+        manual     — النشر يدوياً فقط بضغطة زر
+        onSave     — نشر تلقائي عند كل حفظ
+        scheduled  — نشر بجدول زمني (انظر scheduledAt)
+    -->
+    <xs:attribute name="publishMode" type="dlof:PublishModeType" use="optional" default="manual"/>
+
+    <!--
+      scheduledAt: وقت النشر المجدوَل (يُستخدم مع publishMode="scheduled")
+    -->
+    <xs:attribute name="scheduledAt" type="xs:dateTime"          use="optional"/>
+
+  </xs:complexType>
+
+  <!-- ── PublishEndpointType ── -->
+  <xs:complexType name="PublishEndpointType">
+    <xs:sequence>
+      <!--
+        host: عنوان الخادم
+        أمثلة:
+          sftp    → "mysite.com"
+          github  → "github.com/user/user.github.io"
+          netlify → "api.netlify.com/api/v1/sites/SITE_ID/deploys"
+          custom  → "https://my-cms.example.com/api/publish"
+      -->
+      <xs:element name="host"       type="xs:string"/>
+      <xs:element name="protocol"   type="dlof:PublishProtocolType"/>
+
+      <!--
+        remotePath: المسار على الخادم حيث يُرفع ملف HTML
+        مثال: "/public_html/dlof/" أو "docs/"
+      -->
+      <xs:element name="remotePath" type="xs:string"   minOccurs="0"/>
+
+      <!--
+        branch: الفرع المستهدف (لـ github)
+        افتراضي: "gh-pages"
+      -->
+      <xs:element name="branch"     type="xs:string"   minOccurs="0"/>
+
+      <!--
+        credentialRef: مرجع للبيانات السرية (اسم متغير بيئة أو
+        مفتاح في keystore الجهاز) — لا تُخزَّن كلمة المرور هنا
+        مثال: "DLOF_SFTP_KEY" أو "netlify_token"
+      -->
+      <xs:element name="credentialRef" type="xs:string" minOccurs="0"/>
+
+      <!--
+        customHeaders: ترويسات HTTP إضافية للطلب (JSON object)
+        مثال: {"X-Api-Key":"${MY_KEY}","Content-Type":"text/html"}
+      -->
+      <xs:element name="customHeaders" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── أنواع مساعدة لـ webPublish ── -->
+  <xs:simpleType name="PublishProtocolType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="sftp"/>
+      <xs:enumeration value="ftp"/>
+      <xs:enumeration value="github"/>
+      <xs:enumeration value="netlify"/>
+      <xs:enumeration value="custom"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="PublishModeType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="manual"/>
+      <xs:enumeration value="onSave"/>
+      <xs:enumeration value="scheduled"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="PublishStatusType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="success"/>
+      <xs:enumeration value="failed"/>
+      <xs:enumeration value="pending"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="OgContentType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="article"/>
+      <xs:enumeration value="book"/>
+      <xs:enumeration value="website"/>
+      <xs:enumeration value="profile"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="TwitterCardType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="summary"/>
+      <xs:enumeration value="summary_large_image"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+</xs:schema>
