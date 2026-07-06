@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:dlt="https://dlof.org/schema/template/1.0"
+           targetNamespace="https://dlof.org/schema/template/1.0"
+           elementFormDefault="qualified">
+
+  <!--
+    وصف حزمة قالب DLoF (template.xml) — يوضع داخل ملف مضغوط بامتداد
+    .dlofTemplate مع ملف Kotlin مرجعي بنفس التعريف (Template.kt)،
+    بحيث يمكن "استرداد" (استيراد) القالب وتطبيقه على أي عدد من ملفات .dlof
+    عبر <template ref="..."/> بدل تكرار كتابة الألوان والخط في كل ملف.
+  -->
+  <xs:element name="dlofTemplate">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="design" type="dlt:DesignType"/>
+      </xs:sequence>
+      <xs:attribute name="id" type="xs:ID" use="required"/>
+      <xs:attribute name="name" type="xs:string" use="required"/>
+      <xs:attribute name="author" type="xs:string" use="optional"/>
+      <xs:attribute name="version" type="xs:string" use="required" fixed="1.0"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:complexType name="DesignType">
+    <xs:attribute name="primaryColor" type="xs:string" use="optional"/>
+    <xs:attribute name="secondaryColor" type="xs:string" use="optional"/>
+    <xs:attribute name="backgroundColor" type="xs:string" use="optional"/>
+    <xs:attribute name="textColor" type="xs:string" use="optional"/>
+    <xs:attribute name="fontFamily" type="xs:string" use="optional"/>
+    <xs:attribute name="layout" type="dlt:TemplateLayoutType" use="optional" default="standard"/>
+    <xs:attribute name="headerAttachmentRef" type="xs:string" use="optional"/>
+  </xs:complexType>
+
+  <xs:simpleType name="TemplateLayoutType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="standard"/>
+      <xs:enumeration value="card"/>
+      <xs:enumeration value="magazine"/>
+      <xs:enumeration value="minimal"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+</xs:schema>
